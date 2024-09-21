@@ -22,7 +22,7 @@ const App = () => {
     if (!city.trim()) return;
     setLoading(true);
     try {
-      const response = await axios.get(`http://localhost:5000/api/destinations?keyword=${city}`);
+      const response = await axios.get(`https://backend-travel-1-zsst.onrender.com/api/destinations?keyword=${city}`);
       const data = response.data;
 
       const uniqueCategories = [...new Set(data.map((item) => item.category))];
