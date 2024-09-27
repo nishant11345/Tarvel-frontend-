@@ -20,20 +20,68 @@ const App = () => {
 
   const fetchDestinations = async () => {
     if (!city.trim()) return;
+    
+    const cachedData = localStorage.getItem(city);
+    if (cachedData) {
+      const parsedData = JSON.parse(cachedData);
+      setDestinations(parsedData);
+      setCategories([...new Set(parsedData.map((item) => item.category))]);
+      setTotalPages(Math.ceil(parsedData.length / cardsPerPage));
+      return;
+    }
+  
     setLoading(true);
+  
+    const overpassQuery = `
+      [out:json][timeout:25];
+      area[name="${city}"]->.searchArea;
+      (
+        node["tourism"](area.searchArea);
+        node["historic"](area.searchArea);
+        node["leisure"](area.searchArea);
+        node["amenity"](area.searchArea)
+          ["amenity"!~"school|bank|bicycle_parking|waste_basket|university|hospital|parking|fuel|ferry_terminal|post_office|library|clinic|post_box|place_of_worship|police"];
+      );
+      out center 20;  // Limit results to 20
+    `;
+  
     try {
-      const response = await axios.get(`https://backend-travel-1-zsst.onrender.com/api/destinations?keyword=${city}`);
-      const data = response.data;
-
-      const uniqueCategories = [...new Set(data.map((item) => item.category))];
-      setCategories(uniqueCategories);
-      setDestinations(data);
-      setTotalPages(Math.ceil(data.length / cardsPerPage));
+      const response = await axios.get('https://overpass-api.de/api/interpreter', {
+        params: {
+          data: overpassQuery,
+        },
+      });
+  
+      const data = response.data.elements;
+  
+      const formattedDestinations = data.map((element) => ({
+        id: element.id,
+        name: element.tags.name || 'Unknown',
+        category: element.tags.tourism || element.tags.historic || element.tags.leisure || element.tags.amenity || 'Unknown',
+        geoCode: {
+          latitude: element.lat || (element.center ? element.center.lat : null),
+          longitude: element.lon || (element.center ? element.center.lon : null),
+        },
+        tags: Object.keys(element.tags),
+        distance: null,
+        rating: null,
+      }));
+  
+      setDestinations(formattedDestinations);
+      setCategories([...new Set(formattedDestinations.map((item) => item.category))]);
+      setTotalPages(Math.ceil(formattedDestinations.length / cardsPerPage));
+  
+      // Store the data in localStorage
+      localStorage.setItem(city, JSON.stringify(formattedDestinations));
+  
     } catch (error) {
       console.error('Error fetching destinations:', error);
     }
+    
     setLoading(false);
   };
+  
+  
 
   const filteredDestinations = selectedCategory
     ? destinations.filter((destination) => destination.category === selectedCategory)
