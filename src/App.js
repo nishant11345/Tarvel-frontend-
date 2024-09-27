@@ -9,8 +9,6 @@ import './App.css'; // Custom CSS for background and other styling
 const App = () => {
   const [city, setCity] = useState('');
   const [destinations, setDestinations] = useState([]);
-  console.log(destinations);
-  
   const [categories, setCategories] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('');
   const [page, setPage] = useState(1);
@@ -18,42 +16,66 @@ const App = () => {
   const [loading, setLoading] = useState(false);
   const cardsPerPage = 21;
 
-  const fetchDestinations = async () => {
-    if (!city.trim()) return;
-    
-    const cachedData = localStorage.getItem(city);
-    if (cachedData) {
-      const parsedData = JSON.parse(cachedData);
-      setDestinations(parsedData);
-      setCategories([...new Set(parsedData.map((item) => item.category))]);
-      setTotalPages(Math.ceil(parsedData.length / cardsPerPage));
-      return;
-    }
-  
-    setLoading(true);
-  
-    const overpassQuery = `
-      [out:json][timeout:25];
-      area[name="${city}"]->.searchArea;
-      (
-        node["tourism"](area.searchArea);
-        node["historic"](area.searchArea);
-        node["leisure"](area.searchArea);
-        node["amenity"](area.searchArea)
-          ["amenity"!~"school|bank|bicycle_parking|waste_basket|university|hospital|parking|fuel|ferry_terminal|post_office|library|clinic|post_box|place_of_worship|police"];
-      );
-      out center 20;  // Limit results to 20
-    `;
-  
+  // Function to fetch city coordinates using Nominatim
+  const fetchCityCoordinates = async (city) => {
     try {
-      const response = await axios.get('https://overpass-api.de/api/interpreter', {
+      const response = await axios.get('https://nominatim.openstreetmap.org/search', {
         params: {
-          data: overpassQuery,
+          q: city,
+          format: 'json',
+          limit: 1,
         },
       });
-  
-      const data = response.data.elements;
-  
+
+      if (response.data.length === 0) {
+        throw new Error('City not found');
+      }
+
+      const { lat, lon } = response.data[0];
+      return { lat, lon };
+    } catch (error) {
+      console.error('Error fetching city coordinates:', error);
+      return null;
+    }
+  };
+
+  // Function to fetch destinations using Overpass API
+  const fetchDestinations = async () => {
+    if (!city.trim()) return;
+    setLoading(true);
+
+    try {
+      // Step 1: Fetch city coordinates
+      const cityCoordinates = await fetchCityCoordinates(city);
+      if (!cityCoordinates) {
+        setLoading(false);
+        return;
+      }
+
+      const { lat, lon } = cityCoordinates;
+
+      // Step 2: Construct Overpass Query
+      const overpassQuery = `
+        [out:json][timeout:60];
+        (
+          node(around:50000,${lat},${lon})["tourism"];
+          node(around:50000,${lat},${lon})["historic"];
+          node(around:50000,${lat},${lon})["leisure"];
+          node(around:50000,${lat},${lon})["amenity"]
+            ["amenity"!~"school|bank|bicycle_parking|waste_basket|university|hospital|parking|fuel|ferry_terminal|post_office|library|clinic|post_box|place_of_worship|police"];
+        );
+        out center 20;
+      `;
+
+      const data = await fetchDataWithRetry(overpassQuery, 3, 5000);
+
+      if (data.length === 0) {
+        console.log('No destinations found.');
+        setLoading(false);
+        return;
+      }
+
+      // Format the data
       const formattedDestinations = data.map((element) => ({
         id: element.id,
         name: element.tags.name || 'Unknown',
@@ -66,22 +88,35 @@ const App = () => {
         distance: null,
         rating: null,
       }));
-  
+
       setDestinations(formattedDestinations);
       setCategories([...new Set(formattedDestinations.map((item) => item.category))]);
       setTotalPages(Math.ceil(formattedDestinations.length / cardsPerPage));
-  
-      // Store the data in localStorage
-      localStorage.setItem(city, JSON.stringify(formattedDestinations));
-  
     } catch (error) {
       console.error('Error fetching destinations:', error);
     }
-    
+
     setLoading(false);
   };
-  
-  
+
+  // Function to retry fetching data
+  const fetchDataWithRetry = async (query, retries, delay) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const response = await axios.get('https://overpass-api.de/api/interpreter', {
+          params: { data: query },
+          timeout: 60000, // 60 seconds timeout
+        });
+        return response.data.elements;
+      } catch (error) {
+        console.error(`Error fetching data, attempt ${i + 1}`, error);
+        if (i < retries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, delay)); // Wait before retrying
+        }
+      }
+    }
+    throw new Error('Failed to fetch data after multiple retries');
+  };
 
   const filteredDestinations = selectedCategory
     ? destinations.filter((destination) => destination.category === selectedCategory)
@@ -104,7 +139,7 @@ const App = () => {
         </Typography>
       </Box>
 
-      <Container sx={{ marginTop: '-50px' }}>  {/* Adjusted positioning for the search input */}
+      <Container sx={{ marginTop: '-50px' }}> {/* Adjusted positioning for the search input */}
         <Box className="search-box">
           <TextField
             label="Enter city name"
